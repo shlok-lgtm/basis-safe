@@ -1,0 +1,5 @@
+{
+  "name": "Basis Treasury Guard",
+  "description": "Risk intelligence for DAO treasuries. Monitor stablecoin integrity scores, concentration risk, and coverage quality.",
+  "iconPath": "basis-icon.svg"
+}
