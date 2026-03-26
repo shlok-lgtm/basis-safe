@@ -37,8 +37,8 @@ contract MultiSendTest is Test {
     // --- MultiSend with good scores ---
 
     function test_multiSend_allGoodScores() public {
-        oracle.setScore(USDC, 85, block.timestamp);
-        oracle.setScore(USDT, 80, block.timestamp);
+        oracle.setScoreSimple(USDC, 85, block.timestamp);
+        oracle.setScoreSimple(USDT, 80, block.timestamp);
 
         bytes memory transferUSDC =
             abi.encodeWithSelector(0xa9059cbb, address(0x1), uint256(1000e6));
@@ -71,8 +71,8 @@ contract MultiSendTest is Test {
     // --- MultiSend with one bad score in enforce mode ---
 
     function test_multiSend_oneBadScoreReverts() public {
-        oracle.setScore(USDC, 85, block.timestamp);
-        oracle.setScore(USDT, 50, block.timestamp);
+        oracle.setScoreSimple(USDC, 85, block.timestamp);
+        oracle.setScoreSimple(USDT, 50, block.timestamp);
 
         bytes memory transferUSDC =
             abi.encodeWithSelector(0xa9059cbb, address(0x1), uint256(1000e6));

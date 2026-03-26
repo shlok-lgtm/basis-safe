@@ -29,10 +29,10 @@ contract FailOpenTest is Test {
         transferData = abi.encodeWithSelector(0xa9059cbb, address(0x1), uint256(1000e6));
     }
 
-    // --- Oracle returns score 0 → fail open ---
+    // --- Oracle returns raw score 0 → fail open ---
 
     function test_failOpen_oracleReturnsZeroScore() public {
-        oracle.setScore(USDC, 0, block.timestamp);
+        oracle.setScoreSimple(USDC, 0, block.timestamp);
 
         vm.prank(safe);
         vm.expectEmit(true, false, false, true);
@@ -42,10 +42,11 @@ contract FailOpenTest is Test {
         );
     }
 
-    // --- Oracle returns score > 100 → fail open ---
+    // --- Oracle paused → fail open ---
 
-    function test_failOpen_oracleReturnsScoreOver100() public {
-        oracle.setScore(USDC, 101, block.timestamp);
+    function test_oraclePaused_failsOpen() public {
+        oracle.setScoreSimple(USDC, 50, block.timestamp);
+        oracle.setPaused(true);
 
         vm.prank(safe);
         vm.expectEmit(true, false, false, true);
@@ -72,7 +73,7 @@ contract FailOpenTest is Test {
 
     function test_failOpen_staleData() public {
         uint256 staleTimestamp = block.timestamp - 25 hours;
-        oracle.setScore(USDC, 50, staleTimestamp);
+        oracle.setScoreSimple(USDC, 50, staleTimestamp);
 
         vm.prank(safe);
         vm.expectEmit(true, false, false, true);
@@ -101,7 +102,7 @@ contract FailOpenTest is Test {
     // --- Score exactly at threshold → passes ---
 
     function test_scoreAtThreshold_passes() public {
-        oracle.setScore(USDC, 70, block.timestamp);
+        oracle.setScoreSimple(USDC, 70, block.timestamp);
 
         vm.prank(safe);
         // Should not revert — score == minimum is OK
@@ -113,7 +114,7 @@ contract FailOpenTest is Test {
     // --- Score exactly at 24h boundary → passes (not stale) ---
 
     function test_scoreAtExact24hBoundary_passes() public {
-        oracle.setScore(USDC, 85, block.timestamp - 24 hours);
+        oracle.setScoreSimple(USDC, 85, block.timestamp - 24 hours);
 
         vm.prank(safe);
         guard.checkTransaction(

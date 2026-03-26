@@ -5,45 +5,60 @@ import {IBasisOracle} from "../interfaces/IBasisOracle.sol";
 
 contract MockBasisOracle is IBasisOracle {
     struct ScoreData {
-        uint256 score;
-        uint256 timestamp;
+        uint16 score;
+        bytes2 grade;
+        uint48 timestamp;
+        uint16 version;
         bool exists;
     }
 
     mapping(address => ScoreData) private _scores;
+    bool public paused;
     bool public shouldRevert;
 
-    function setScore(address token, uint256 score, uint256 timestamp) external {
-        _scores[token] = ScoreData({score: score, timestamp: timestamp, exists: true});
+    function setScore(address token, uint16 score, bytes2 grade, uint48 timestamp) external {
+        _scores[token] = ScoreData({
+            score: score,
+            grade: grade,
+            timestamp: timestamp,
+            version: 100,
+            exists: true
+        });
+    }
+
+    function setScoreSimple(address token, uint256 score100, uint256 timestamp) external {
+        _scores[token] = ScoreData({
+            score: uint16(score100 * 100),
+            grade: score100 >= 90 ? bytes2("A") : score100 >= 80 ? bytes2("B") : bytes2("C"),
+            timestamp: uint48(timestamp),
+            version: 100,
+            exists: true
+        });
+    }
+
+    function setPaused(bool _paused) external {
+        paused = _paused;
     }
 
     function setShouldRevert(bool _shouldRevert) external {
         shouldRevert = _shouldRevert;
     }
 
-    function getScore(address token) external view override returns (uint256 score, uint256 timestamp) {
+    function getScore(address token) external view override returns (
+        uint16 score, bytes2 grade, uint48 timestamp, uint16 version
+    ) {
         require(!shouldRevert, "MockBasisOracle: forced revert");
         ScoreData memory data = _scores[token];
-        return (data.score, data.timestamp);
+        return (data.score, data.grade, data.timestamp, data.version);
     }
 
-    function getScores(address[] calldata tokens)
-        external
-        view
-        override
-        returns (uint256[] memory scores, uint256[] memory timestamps)
-    {
-        require(!shouldRevert, "MockBasisOracle: forced revert");
-        scores = new uint256[](tokens.length);
-        timestamps = new uint256[](tokens.length);
-        for (uint256 i = 0; i < tokens.length; i++) {
-            ScoreData memory data = _scores[tokens[i]];
-            scores[i] = data.score;
-            timestamps[i] = data.timestamp;
-        }
+    function isStale(address token, uint256 maxAge) external view override returns (bool) {
+        ScoreData memory data = _scores[token];
+        if (data.timestamp == 0) return true;
+        return (block.timestamp - data.timestamp) > maxAge;
     }
 
-    function hasScore(address token) external view override returns (bool) {
-        return _scores[token].exists;
+    function getScoredTokens() external pure override returns (address[] memory) {
+        return new address[](0);
     }
 }

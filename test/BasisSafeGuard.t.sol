@@ -14,6 +14,8 @@ contract BasisSafeGuardTest is Test {
         address indexed safe, bytes32 txHash, uint256 currentScore, uint256 minRequired, string reason
     );
     event OracleUpdated(address indexed newOracle);
+    event KnownStablecoinAdded(address indexed token);
+    event KnownStablecoinRemoved(address indexed token);
 
     BasisSafeGuard public guard;
     MockBasisOracle public oracle;
@@ -87,6 +89,62 @@ contract BasisSafeGuardTest is Test {
         guard.setOracle(newOracle);
     }
 
+    // --- addKnownStablecoin ---
+
+    function test_addKnownStablecoin_ownerCanAdd() public {
+        address newToken = address(0xABCD);
+        assertFalse(guard.knownStablecoins(newToken));
+        guard.addKnownStablecoin(newToken);
+        assertTrue(guard.knownStablecoins(newToken));
+    }
+
+    function test_addKnownStablecoin_nonOwnerReverts() public {
+        vm.prank(safe);
+        vm.expectRevert(BasisSafeGuard.OnlyOwner.selector);
+        guard.addKnownStablecoin(address(0xABCD));
+    }
+
+    function test_addKnownStablecoin_emitsEvent() public {
+        address newToken = address(0xABCD);
+        vm.expectEmit(true, false, false, false);
+        emit KnownStablecoinAdded(newToken);
+        guard.addKnownStablecoin(newToken);
+    }
+
+    // --- removeKnownStablecoin ---
+
+    function test_removeKnownStablecoin_ownerCanRemove() public {
+        assertTrue(guard.knownStablecoins(USDC));
+        guard.removeKnownStablecoin(USDC);
+        assertFalse(guard.knownStablecoins(USDC));
+    }
+
+    function test_removeKnownStablecoin_nonOwnerReverts() public {
+        vm.prank(safe);
+        vm.expectRevert(BasisSafeGuard.OnlyOwner.selector);
+        guard.removeKnownStablecoin(USDC);
+    }
+
+    function test_removeKnownStablecoin_emitsEvent() public {
+        vm.expectEmit(true, false, false, false);
+        emit KnownStablecoinRemoved(USDC);
+        guard.removeKnownStablecoin(USDC);
+    }
+
+    function test_removeKnownStablecoin_removedTokenPassesThrough() public {
+        vm.prank(safe);
+        guard.configure(75, 70, true, true);
+
+        guard.removeKnownStablecoin(USDC);
+
+        bytes memory data = abi.encodeWithSelector(0xa9059cbb, address(0x1), uint256(1000e6));
+        vm.prank(safe);
+        // Removed stablecoin is no longer checked — passes through even without oracle score
+        guard.checkTransaction(
+            USDC, 0, data, Enum.Operation.Call, 0, 0, 0, address(0), payable(0), "", address(0)
+        );
+    }
+
     // --- checkTransaction: uninitialized config ---
 
     function test_checkTransaction_uninitializedAllows() public {
@@ -104,7 +162,7 @@ contract BasisSafeGuardTest is Test {
         vm.prank(safe);
         guard.configure(75, 70, true, true);
 
-        oracle.setScore(USDC, 85, block.timestamp);
+        oracle.setScoreSimple(USDC, 85, block.timestamp);
 
         bytes memory data = abi.encodeWithSelector(0xa9059cbb, address(0x1), uint256(1000e6));
         vm.prank(safe);
@@ -119,7 +177,7 @@ contract BasisSafeGuardTest is Test {
         vm.prank(safe);
         guard.configure(75, 70, true, true);
 
-        oracle.setScore(USDC, 50, block.timestamp);
+        oracle.setScoreSimple(USDC, 50, block.timestamp);
 
         bytes memory data = abi.encodeWithSelector(0xa9059cbb, address(0x1), uint256(1000e6));
         vm.prank(safe);
@@ -143,7 +201,7 @@ contract BasisSafeGuardTest is Test {
         vm.prank(safe);
         guard.configure(75, 70, false, true);
 
-        oracle.setScore(USDC, 50, block.timestamp);
+        oracle.setScoreSimple(USDC, 50, block.timestamp);
 
         bytes memory data = abi.encodeWithSelector(0xa9059cbb, address(0x1), uint256(1000e6));
         vm.prank(safe);
@@ -179,6 +237,23 @@ contract BasisSafeGuardTest is Test {
         vm.prank(safe);
         guard.checkTransaction(
             address(0x1), 1 ether, "", Enum.Operation.Call, 0, 0, 0, address(0), payable(0), "", address(0)
+        );
+    }
+
+    // --- Score conversion: raw 8844 → 88 (integer division) ---
+
+    function test_scoreConversion() public {
+        vm.prank(safe);
+        guard.configure(75, 70, true, true);
+
+        // Set raw score 8844 (represents 88.44 on the 0-100 scale)
+        oracle.setScore(USDC, 8844, bytes2("A"), uint48(block.timestamp));
+
+        bytes memory data = abi.encodeWithSelector(0xa9059cbb, address(0x1), uint256(1000e6));
+        vm.prank(safe);
+        // 8844 / 100 = 88, which is >= minAssetSiiScore of 70 → should pass
+        guard.checkTransaction(
+            USDC, 0, data, Enum.Operation.Call, 0, 0, 0, address(0), payable(0), "", address(0)
         );
     }
 

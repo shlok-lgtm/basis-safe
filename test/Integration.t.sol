@@ -46,7 +46,7 @@ contract IntegrationTest is Test {
         assertTrue(init);
 
         // 3. Oracle has good score → transfer allowed
-        oracle.setScore(USDC_MAINNET, 85, block.timestamp);
+        oracle.setScoreSimple(USDC_MAINNET, 85, block.timestamp);
 
         bytes memory transferData =
             abi.encodeWithSelector(0xa9059cbb, recipient, uint256(1000e6));
@@ -67,7 +67,7 @@ contract IntegrationTest is Test {
         );
 
         // 4. Score drops → warn emitted (not enforce)
-        oracle.setScore(USDC_MAINNET, 50, block.timestamp);
+        oracle.setScoreSimple(USDC_MAINNET, 50, block.timestamp);
 
         vm.prank(safe);
         vm.expectEmit(true, false, false, true);

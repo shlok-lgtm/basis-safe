@@ -27,6 +27,8 @@ contract BasisSafeGuard is BaseGuard {
     event OracleUpdated(address indexed newOracle);
     event ApiFallbackUsed(address indexed safe, bytes32 txHash);
     event StaleDataWarning(address indexed safe, address token, uint256 age);
+    event KnownStablecoinAdded(address indexed token);
+    event KnownStablecoinRemoved(address indexed token);
 
     // --- Errors ---
     error TransactionBelowThreshold(address token, uint256 score, uint256 minimum, string reason);
@@ -82,6 +84,18 @@ contract BasisSafeGuard is BaseGuard {
         emit OracleUpdated(_oracle);
     }
 
+    function addKnownStablecoin(address token) external {
+        if (msg.sender != owner) revert OnlyOwner();
+        knownStablecoins[token] = true;
+        emit KnownStablecoinAdded(token);
+    }
+
+    function removeKnownStablecoin(address token) external {
+        if (msg.sender != owner) revert OnlyOwner();
+        knownStablecoins[token] = false;
+        emit KnownStablecoinRemoved(token);
+    }
+
     // --- checkTransaction (BEFORE every Safe tx) ---
     function checkTransaction(
         address to,
@@ -122,18 +136,32 @@ contract BasisSafeGuard is BaseGuard {
     function _checkAssetScore(address safe, address token, GuardConfig memory cfg) internal {
         if (basisOracle == address(0)) {
             emit ApiFallbackUsed(safe, bytes32(0));
-            return; // fail open
+            return; // fail open — no oracle configured
+        }
+
+        // If oracle is paused, fail open
+        try IBasisOracle(basisOracle).paused() returns (bool isPaused) {
+            if (isPaused) {
+                emit ApiFallbackUsed(safe, bytes32(0));
+                return;
+            }
+        } catch {
+            emit ApiFallbackUsed(safe, bytes32(0));
+            return;
         }
 
         try IBasisOracle(basisOracle).getScore(token) returns (
-            uint256 score, uint256 timestamp
+            uint16 rawScore, bytes2, uint48 timestamp, uint16
         ) {
-            if (score == 0 || score > 100) {
+            // Convert from 0-10000 to 0-100 to match GuardConfig thresholds
+            uint256 score = uint256(rawScore) / 100;
+
+            if (rawScore == 0) {
                 emit ApiFallbackUsed(safe, bytes32(0));
-                return; // invalid score — fail open
+                return; // never-scored or zero — fail open
             }
-            if (block.timestamp - timestamp > MAX_SCORE_AGE) {
-                emit StaleDataWarning(safe, token, block.timestamp - timestamp);
+            if (block.timestamp - uint256(timestamp) > MAX_SCORE_AGE) {
+                emit StaleDataWarning(safe, token, block.timestamp - uint256(timestamp));
                 return; // stale — fail open
             }
             if (score < cfg.minAssetSiiScore) {
@@ -143,10 +171,7 @@ contract BasisSafeGuard is BaseGuard {
                     );
                 } else {
                     emit TransactionWarned(
-                        safe,
-                        bytes32(0),
-                        score,
-                        cfg.minAssetSiiScore,
+                        safe, bytes32(0), score, cfg.minAssetSiiScore,
                         "Asset SII score below minimum"
                     );
                 }

@@ -1,0 +1,224 @@
+# Fix BasisSafeGuard: Oracle Interface + Dynamic Stablecoin Registry
+
+## What & Why
+
+The BasisSafeGuard contract has two bugs that will cause it to fail when deployed against the real BasisSIIOracle:
+
+1. **Oracle interface mismatch.** The guard calls `IBasisOracle.getScore()` expecting `(uint256 score, uint256 timestamp)` with scores 0-100. The real oracle (`BasisSIIOracle.sol` in the `basis-oracle` repo) returns `(uint16 score, bytes2 grade, uint48 timestamp, uint16 version)` with scores 0-10000. Every oracle call will revert.
+
+2. **Hardcoded stablecoins.** `_initKnownStablecoins()` bakes in 10 addresses at deploy time. The system now scores 14+ and auto-promotes new ones continuously. There's no way to add tokens without redeploying.
+
+## Done looks like
+
+* `IBasisOracle.sol` interface matches the real `BasisSIIOracle` contract: `getScore(address)` returns `(uint16 score, bytes2 grade, uint48 timestamp, uint16 version)`. Also exposes `isStale(address, uint256)` and `paused()`.
+* `_checkAssetScore` reads the real oracle return values, divides `uint16` score by 100 to get the 0-100 range that `GuardConfig.minAssetSiiScore` uses, and handles the `paused()` state (fail-open).
+* `MockBasisOracle` updated to match the new interface so all existing tests compile and pass.
+* Owner can call `addKnownStablecoin(address)` and `removeKnownStablecoin(address)` to manage the registry without redeploying.
+* All existing tests still pass. Add tests for the new admin functions.
+
+## Out of scope
+
+* Changes to the Safe App React code (`app/` directory)
+* Changes to deploy scripts (those can be updated later)
+* Changing the `GuardConfig` struct or the `configure()` function
+
+## Tasks
+
+### 1. Replace `IBasisOracle.sol` interface
+
+Replace `contracts/interfaces/IBasisOracle.sol` with an interface that matches the real oracle:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+interface IBasisOracle {
+    function getScore(address token) external view returns (
+        uint16 score,      // 0-10000 (divide by 100 for human-readable 0-100)
+        bytes2 grade,      // ASCII grade e.g. "A+", "B-"
+        uint48 timestamp,  // Unix timestamp of score calculation
+        uint16 version     // Formula version (100 = v1.0.0)
+    );
+
+    function isStale(address token, uint256 maxAge) external view returns (bool);
+    function paused() external view returns (bool);
+    function getScoredTokens() external view returns (address[] memory);
+}
+```
+
+### 2. Update `_checkAssetScore` in `BasisSafeGuard.sol`
+
+Change the oracle call to match the new interface:
+
+```solidity
+function _checkAssetScore(address safe, address token, GuardConfig memory cfg) internal {
+    if (basisOracle == address(0)) {
+        emit ApiFallbackUsed(safe, bytes32(0));
+        return; // fail open — no oracle configured
+    }
+
+    // If oracle is paused, fail open
+    try IBasisOracle(basisOracle).paused() returns (bool isPaused) {
+        if (isPaused) {
+            emit ApiFallbackUsed(safe, bytes32(0));
+            return;
+        }
+    } catch {
+        emit ApiFallbackUsed(safe, bytes32(0));
+        return;
+    }
+
+    try IBasisOracle(basisOracle).getScore(token) returns (
+        uint16 rawScore, bytes2, uint48 timestamp, uint16
+    ) {
+        // Convert from 0-10000 to 0-100 to match GuardConfig thresholds
+        uint256 score = uint256(rawScore) / 100;
+
+        if (rawScore == 0) {
+            emit ApiFallbackUsed(safe, bytes32(0));
+            return; // never-scored or zero — fail open
+        }
+        if (block.timestamp - uint256(timestamp) > MAX_SCORE_AGE) {
+            emit StaleDataWarning(safe, token, block.timestamp - uint256(timestamp));
+            return; // stale — fail open
+        }
+        if (score < cfg.minAssetSiiScore) {
+            if (cfg.enforceMode) {
+                revert TransactionBelowThreshold(
+                    token, score, cfg.minAssetSiiScore, "Asset SII score below minimum"
+                );
+            } else {
+                emit TransactionWarned(
+                    safe, bytes32(0), score, cfg.minAssetSiiScore,
+                    "Asset SII score below minimum"
+                );
+            }
+        }
+    } catch {
+        emit ApiFallbackUsed(safe, bytes32(0));
+    }
+}
+```
+
+### 3. Add dynamic stablecoin management functions
+
+Add to `BasisSafeGuard.sol`:
+
+```solidity
+function addKnownStablecoin(address token) external {
+    if (msg.sender != owner) revert OnlyOwner();
+    knownStablecoins[token] = true;
+    emit KnownStablecoinAdded(token);
+}
+
+function removeKnownStablecoin(address token) external {
+    if (msg.sender != owner) revert OnlyOwner();
+    knownStablecoins[token] = false;
+    emit KnownStablecoinRemoved(token);
+}
+```
+
+Add the corresponding events:
+```solidity
+event KnownStablecoinAdded(address indexed token);
+event KnownStablecoinRemoved(address indexed token);
+```
+
+### 4. Update `MockBasisOracle.sol`
+
+Replace the mock to match the new interface:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import {IBasisOracle} from "../interfaces/IBasisOracle.sol";
+
+contract MockBasisOracle is IBasisOracle {
+    struct ScoreData {
+        uint16 score;       // 0-10000
+        bytes2 grade;
+        uint48 timestamp;
+        uint16 version;
+        bool exists;
+    }
+
+    mapping(address => ScoreData) private _scores;
+    bool public override paused;
+    bool public shouldRevert;
+
+    function setScore(address token, uint16 score, bytes2 grade, uint48 timestamp) external {
+        _scores[token] = ScoreData({
+            score: score,
+            grade: grade,
+            timestamp: timestamp,
+            version: 100,
+            exists: true
+        });
+    }
+
+    // Convenience: set score with just a 0-100 value (auto-converts to 0-10000)
+    function setScoreSimple(address token, uint256 score100, uint256 timestamp) external {
+        _scores[token] = ScoreData({
+            score: uint16(score100 * 100),
+            grade: score100 >= 90 ? bytes2("A") : score100 >= 80 ? bytes2("B") : bytes2("C"),
+            timestamp: uint48(timestamp),
+            version: 100,
+            exists: true
+        });
+    }
+
+    function setPaused(bool _paused) external {
+        paused = _paused;
+    }
+
+    function setShouldRevert(bool _shouldRevert) external {
+        shouldRevert = _shouldRevert;
+    }
+
+    function getScore(address token) external view override returns (
+        uint16 score, bytes2 grade, uint48 timestamp, uint16 version
+    ) {
+        require(!shouldRevert, "MockBasisOracle: forced revert");
+        ScoreData memory data = _scores[token];
+        return (data.score, data.grade, data.timestamp, data.version);
+    }
+
+    function isStale(address token, uint256 maxAge) external view override returns (bool) {
+        ScoreData memory data = _scores[token];
+        if (data.timestamp == 0) return true;
+        return (block.timestamp - data.timestamp) > maxAge;
+    }
+
+    function getScoredTokens() external pure override returns (address[] memory) {
+        return new address[](0);
+    }
+}
+```
+
+### 5. Update tests
+
+The existing tests use the old mock interface (`setScore(address, uint256, uint256)`). Update all test files to use `setScoreSimple(address, uint256, uint256)` which does the 0-100 → 0-10000 conversion internally, so test assertions stay in the human-readable 0-100 range.
+
+Add new tests:
+- `test_addKnownStablecoin` — owner can add, non-owner reverts
+- `test_removeKnownStablecoin` — owner can remove, transfers to removed token pass through unchecked
+- `test_oraclePaused_failsOpen` — guard allows all transactions when oracle is paused
+- `test_scoreConversion` — oracle returning 8844 (88.44) correctly compared against minAssetSiiScore of 70
+
+## Relevant files
+
+* `contracts/interfaces/IBasisOracle.sol` — replace entirely
+* `contracts/BasisSafeGuard.sol` — update `_checkAssetScore`, add admin functions + events
+* `contracts/mocks/MockBasisOracle.sol` — replace entirely
+* `test/BasisSafeGuard.t.sol` — update mock calls, add new tests
+* `test/FailOpen.t.sol` — update mock calls
+* `test/Integration.t.sol` — update mock calls
+* `test/MultiSend.t.sol` — update mock calls
+
+## Do NOT
+
+* Touch the `app/` directory (React Safe App)
+* Change `GuardConfig` struct fields or `configure()` signature
+* Remove `_initKnownStablecoins()` — keep it as the default set, the admin functions add/remove on top of it
+* Change the deploy scripts
