@@ -1,4 +1,4 @@
-export const BASIS_API_URL = "https://basis-demo.replit.app";
+export const BASIS_API_URL = "https://basisprotocol.xyz";
 
 export const GUARD_CONTRACT_ADDRESS =
   "0x0000000000000000000000000000000000000000"; // Update after deployment

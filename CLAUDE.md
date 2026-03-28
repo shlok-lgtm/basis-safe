@@ -22,11 +22,11 @@ A **Safe Guard Module** (Solidity contract) and **Safe App** (React web UI) that
 
 2. **Safe App** — React + TypeScript web app loaded inside Safe{Wallet} as an iframe. Shows treasury risk dashboard, holdings breakdown, concentration analysis, Guard configuration panel, historical risk trend, event log.
 
-Both consume the **existing Basis API** at `https://basis-demo.replit.app`. There is NO separate backend, Express server, or API to build. The Safe App is a frontend that calls the live API directly.
+Both consume the **existing Basis API** at `https://basisprotocol.xyz`. There is NO separate backend, Express server, or API to build. The Safe App is a frontend that calls the live API directly.
 
 ## What's Already Running (the API this project consumes)
 
-The Basis API is live at `https://basis-demo.replit.app` with these endpoints:
+The Basis API is live at `https://basisprotocol.xyz` with these endpoints:
 
 ```
 GET /api/health              → API status, last scoring cycle
@@ -63,7 +63,7 @@ Scores are 0–100. Grades: A+ (95+), A (90+), A- (85+), B+ (80+), B (75+), B- (
                   ▼
 ┌──────────────────────────────────────────────────┐
 │ Existing Basis API (DO NOT REBUILD)              │
-│ https://basis-demo.replit.app/api/*              │
+│ https://basisprotocol.xyz/api/*              │
 │ Already running. Already has all endpoints.      │
 └──────────────────────────────────────────────────┘
 
@@ -494,7 +494,7 @@ await sdk.txs.send({ txs: [{
 
 ## API Endpoints (from existing Basis API — DO NOT REBUILD)
 
-Base URL: `https://basis-demo.replit.app`
+Base URL: `https://basisprotocol.xyz`
 
 | Endpoint | Returns | Used By |
 |----------|---------|---------|
